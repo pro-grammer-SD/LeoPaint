@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sun, Moon, GitBranch, Bell, BellOff } from 'lucide-react';
+import { Sun, Moon, GitBranch, Bell, BellOff, Key } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { generateImage, enhancePrompt, editImage } from './services/genAiService';
+import { generateImage, enhancePrompt, editImage, getStoredApiKey, setStoredApiKey, clearStoredApiKey } from './services/genAiService';
 import { GenerationConfig, GenerationResult, HistoryItem, AspectRatio } from './types';
 import { EditorialButton, AspectRatioSelector, PromptEnhancer } from './components/ui/Controls';
 import { ImageDisplay } from './components/ImageDisplay';
 import { EditModal } from './components/ui/EditModal';
 import { Toast } from './components/ui/Toast';
+import { ApiKeyModal } from './components/ui/ApiKeyModal';
 
 const App: React.FC = () => {
   const [config, setConfig] = useState<GenerationConfig>({
@@ -30,12 +31,23 @@ const App: React.FC = () => {
   const [ripple, setRipple] = useState<{ x: number, y: number } | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
-  // Notifications & Feedback
+  // Auth & Notifications
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [hasKey, setHasKey] = useState(false);
 
   useEffect(() => {
-    // 1. Check for URL params to load shared config
+    // 1. Check for API Key on load
+    const storedKey = getStoredApiKey();
+    if (storedKey) {
+      setHasKey(true);
+    } else {
+      setHasKey(false);
+      setShowApiKeyModal(true);
+    }
+
+    // 2. Check for URL params to load shared config
     const params = new URLSearchParams(window.location.search);
     const sharedPrompt = params.get('prompt');
     const sharedAr = params.get('ar') as AspectRatio;
@@ -48,7 +60,7 @@ const App: React.FC = () => {
       }));
     }
 
-    // 2. Load history
+    // 3. Load history
     const saved = localStorage.getItem('leopaint_history');
     if (saved) {
       try {
@@ -63,18 +75,30 @@ const App: React.FC = () => {
       }
     }
     
-    // 3. Theme preference
+    // 4. Theme preference
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
        setIsDark(false);
        document.documentElement.classList.remove('dark');
        document.body.classList.add('light-mode-bg');
     }
 
-    // 4. Notification Permissions Check
+    // 5. Notification Permissions Check
     if (Notification.permission === 'granted') {
       setNotificationsEnabled(true);
     }
   }, []);
+
+  const handleSaveApiKey = (key: string) => {
+    setStoredApiKey(key);
+    setHasKey(true);
+    setShowApiKeyModal(false);
+    setShowToast(true); // Feedback
+  };
+
+  const handleApiKeyClick = () => {
+    // Directly open the modal to allow user to view/update key
+    setShowApiKeyModal(true);
+  };
 
   const toggleTheme = (e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect();
@@ -177,6 +201,8 @@ const App: React.FC = () => {
       setConfig({ ...config, prompt: enhanced });
     } catch (e) {
       console.error(e);
+      // If error is auth related, prompt might need key
+      if (!getStoredApiKey()) setShowApiKeyModal(true);
     } finally {
       setEnhancing(false);
     }
@@ -184,6 +210,12 @@ const App: React.FC = () => {
 
   const handleGenerate = async () => {
     if (!config.prompt.trim()) return;
+
+    // Pre-check for API Key
+    if (!getStoredApiKey()) {
+      setShowApiKeyModal(true);
+      return;
+    }
 
     setGenerationState({ loading: true, error: null });
     
@@ -195,15 +227,22 @@ const App: React.FC = () => {
       setGenerationState({ loading: false, error: null });
       triggerCelebration();
 
-      // Removed Cloud Upload logic here
-
     } catch (err: any) {
       setGenerationState({ loading: false, error: err.message || "Something went wrong" });
+      if (err.message.includes("API Key")) {
+        setShowApiKeyModal(true);
+      }
     }
   };
 
   const handleEditSubmit = async (instruction: string) => {
     if (!activeItem || !activeItem.imageUrl) return;
+    
+    if (!getStoredApiKey()) {
+      setShowApiKeyModal(true);
+      return;
+    }
+
     setIsEditModalOpen(false);
     setGenerationState({ loading: true, error: null });
 
@@ -216,10 +255,11 @@ const App: React.FC = () => {
       setGenerationState({ loading: false, error: null });
       triggerCelebration();
 
-      // Removed Cloud Upload logic here
-
     } catch (err: any) {
       setGenerationState({ loading: false, error: err.message || "Failed to edit image" });
+      if (err.message.includes("API Key")) {
+        setShowApiKeyModal(true);
+      }
     }
   };
 
@@ -261,6 +301,15 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-4">
+           {/* API Key Button */}
+           <button 
+            onClick={handleApiKeyClick}
+            className={`transition-colors ${hasKey ? 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400' : 'text-amber-500 hover:text-amber-600 animate-pulse'}`}
+            title="Manage API Key"
+          >
+            <Key size={20} />
+          </button>
+
           <button 
             onClick={toggleNotifications}
             className={`transition-all duration-300 ${notificationsEnabled ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400'}`}
@@ -443,8 +492,14 @@ const App: React.FC = () => {
           loading={generationState.loading}
         />
 
+        <ApiKeyModal
+          isOpen={showApiKeyModal}
+          onSave={handleSaveApiKey}
+          onClose={hasKey ? () => setShowApiKeyModal(false) : undefined}
+        />
+
         <Toast 
-          message="Vision Synthesized Successfully"
+          message={showApiKeyModal ? null : "System Ready"}
           isVisible={showToast}
           onClose={() => setShowToast(false)}
         />

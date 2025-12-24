@@ -1,9 +1,60 @@
 import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig } from "../types";
 
-// Initialize the client with the environment variable
-// Using a fallback empty string prevents the app from crashing on load if the key is missing
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+// --- Cookie Management ---
+export const getStoredApiKey = (): string | null => {
+  try {
+    const name = "leopaint_api_key=";
+    const decodedCookie = decodeURIComponent(document.cookie);
+    const ca = decodedCookie.split(';');
+    for(let i = 0; i <ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) == ' ') {
+        c = c.substring(1);
+      }
+      if (c.indexOf(name) == 0) {
+        return c.substring(name.length, c.length);
+      }
+    }
+  } catch (e) {
+    console.warn("Cookie access failed", e);
+  }
+  // Fallback to process.env if available (e.g. set via build tools)
+  return process.env.API_KEY || null;
+};
+
+export const setStoredApiKey = (key: string) => {
+  const d = new Date();
+  d.setTime(d.getTime() + (365*24*60*60*1000)); // 1 year persistence
+  const expires = "expires="+ d.toUTCString();
+  document.cookie = "leopaint_api_key=" + key + ";" + expires + ";path=/;SameSite=Strict";
+  // Reset instance to ensure new key is used
+  resetAiClient();
+};
+
+export const clearStoredApiKey = () => {
+  document.cookie = "leopaint_api_key=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  resetAiClient();
+};
+
+// --- Client Singleton ---
+let aiInstance: GoogleGenAI | null = null;
+
+const getAiClient = (): GoogleGenAI => {
+  if (aiInstance) return aiInstance;
+  
+  const key = getStoredApiKey();
+  if (!key) {
+    throw new Error("API Key is missing. Please enter your Google GenAI API Key.");
+  }
+  
+  aiInstance = new GoogleGenAI({ apiKey: key });
+  return aiInstance;
+};
+
+export const resetAiClient = () => {
+  aiInstance = null;
+};
 
 const findImagePart = (response: any): string | null => {
    if (response.candidates && response.candidates[0].content.parts) {
@@ -24,6 +75,8 @@ export const generateImage = async (
 ): Promise<string> => {
   try {
     if (onStatus) onStatus("Initializing neural pathways...");
+
+    const ai = getAiClient();
 
     // Use the Nano Banana model (gemini-2.5-flash-image)
     const response = await ai.models.generateContent({
@@ -46,6 +99,9 @@ export const generateImage = async (
     throw new Error("No visual data received from the model.");
   } catch (error: any) {
     console.error("GenAI Error:", error);
+    if (error.message.includes("API Key")) {
+         throw new Error("Invalid or missing API Key. Please reset it.");
+    }
     throw new Error(error.message || "Failed to synthesize image.");
   }
 };
@@ -58,6 +114,8 @@ export const editImage = async (
 ): Promise<string> => {
   try {
     if (onStatus) onStatus("Analyzing source matrix...");
+
+    const ai = getAiClient();
 
     // Strip the data:image/png;base64, prefix if present for the API call
     const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
@@ -99,6 +157,8 @@ export const editImage = async (
 
 export const enhancePrompt = async (currentPrompt: string): Promise<string> => {
   try {
+    const ai = getAiClient();
+    
     // Use a text model for prompt enhancement
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
