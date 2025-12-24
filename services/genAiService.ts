@@ -2,7 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig } from "../types";
 
 // Initialize the client with the environment variable
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Using a fallback empty string prevents the app from crashing on load if the key is missing
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
 
 const findImagePart = (response: any): string | null => {
    if (response.candidates && response.candidates[0].content.parts) {

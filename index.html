@@ -38,6 +38,10 @@
         }
       }
     </script>
+    <script>
+      // Polyfill process.env for browser environments to prevent crash on Vercel
+      window.process = window.process || { env: {} };
+    </script>
     <style>
       body {
         background-color: #050505;
