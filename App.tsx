@@ -9,6 +9,8 @@ import { ImageDisplay } from './components/ImageDisplay';
 import { EditModal } from './components/ui/EditModal';
 import { Toast } from './components/ui/Toast';
 import { ApiKeyModal } from './components/ui/ApiKeyModal';
+import { Tooltip } from './components/ui/Tooltip';
+import { ErrorDialog } from './components/ui/ErrorDialog';
 
 const App: React.FC = () => {
   const [config, setConfig] = useState<GenerationConfig>({
@@ -19,10 +21,13 @@ const App: React.FC = () => {
   // Current Active Image State
   const [activeItem, setActiveItem] = useState<HistoryItem | null>(null);
 
-  // Transient Loading/Error State
-  const [generationState, setGenerationState] = useState<{loading: boolean; error: string | null}>({
-    loading: false,
-    error: null
+  // Transient Loading State (Errors now handled by dialog)
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Error Dialog State
+  const [errorState, setErrorState] = useState<{ isOpen: boolean; title?: string; message: string; details?: any }>({
+    isOpen: false,
+    message: "",
   });
 
   const [enhancing, setEnhancing] = useState(false);
@@ -88,6 +93,14 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const showError = (message: string, details?: any, title: string = "Operation Failed") => {
+    setErrorState({ isOpen: true, title, message, details });
+  };
+
+  const closeError = () => {
+    setErrorState(prev => ({ ...prev, isOpen: false }));
+  };
+
   const handleSaveApiKey = (key: string) => {
     setStoredApiKey(key);
     setHasKey(true);
@@ -133,7 +146,7 @@ const App: React.FC = () => {
         }
       } else {
         // Permission denied
-        alert("Notifications are blocked by your browser. Please enable them in site settings.");
+        showError("Notifications Blocked", "Please enable notifications in your browser site settings.", "Permission Denied");
       }
     } else {
       // Logic for disabling (just local state)
@@ -189,7 +202,6 @@ const App: React.FC = () => {
       prompt: item.prompt,
       aspectRatio: item.aspectRatio || "1:1"
     });
-    setGenerationState({ loading: false, error: null });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -199,10 +211,14 @@ const App: React.FC = () => {
     try {
       const enhanced = await enhancePrompt(config.prompt);
       setConfig({ ...config, prompt: enhanced });
-    } catch (e) {
-      console.error(e);
-      // If error is auth related, prompt might need key
-      if (!getStoredApiKey()) setShowApiKeyModal(true);
+    } catch (e: any) {
+      // For prompt enhancement, we fail silently or log, but if it's auth/quota, we show dialog
+      if (e.code === 'QUOTA_EXCEEDED' || e.code === 'AUTH_REQUIRED') {
+         showError(e.message, e.details, "Prompt Optimization Failed");
+         if (e.code === 'AUTH_REQUIRED') setShowApiKeyModal(true);
+      } else {
+        console.warn("Enhancement failed", e);
+      }
     } finally {
       setEnhancing(false);
     }
@@ -217,21 +233,20 @@ const App: React.FC = () => {
       return;
     }
 
-    setGenerationState({ loading: true, error: null });
+    setIsLoading(true);
     
     try {
       const localUrl = await generateImage(config);
-      
       addToHistory(localUrl, null, config, null);
-      
-      setGenerationState({ loading: false, error: null });
       triggerCelebration();
 
     } catch (err: any) {
-      setGenerationState({ loading: false, error: err.message || "Something went wrong" });
-      if (err.message.includes("API Key")) {
+      if (err.code === "AUTH_REQUIRED") {
         setShowApiKeyModal(true);
       }
+      showError(err.message || "An unexpected error occurred during synthesis.", err.details, "Generation Failed");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -244,22 +259,22 @@ const App: React.FC = () => {
     }
 
     setIsEditModalOpen(false);
-    setGenerationState({ loading: true, error: null });
+    setIsLoading(true);
 
     try {
       const localUrl = await editImage(activeItem.imageUrl, instruction, activeItem.aspectRatio);
       
       const newConfig = { ...config, prompt: instruction };
       addToHistory(localUrl, null, newConfig, activeItem.id);
-
-      setGenerationState({ loading: false, error: null });
       triggerCelebration();
 
     } catch (err: any) {
-      setGenerationState({ loading: false, error: err.message || "Failed to edit image" });
-      if (err.message.includes("API Key")) {
+      if (err.code === "AUTH_REQUIRED") {
         setShowApiKeyModal(true);
       }
+      showError(err.message || "Failed to modify the image.", err.details, "Edit Failed");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -302,38 +317,42 @@ const App: React.FC = () => {
         
         <div className="flex items-center gap-4">
            {/* API Key Button */}
-           <button 
-            onClick={handleApiKeyClick}
-            className={`transition-colors ${hasKey ? 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400' : 'text-amber-500 hover:text-amber-600 animate-pulse'}`}
-            title="Manage API Key"
-          >
-            <Key size={20} />
-          </button>
+           <Tooltip content="Manage API Key" position="bottom">
+             <button 
+              onClick={handleApiKeyClick}
+              className={`transition-colors ${hasKey ? 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400' : 'text-amber-500 hover:text-amber-600 animate-pulse'}`}
+            >
+              <Key size={20} />
+            </button>
+           </Tooltip>
 
-          <button 
-            onClick={toggleNotifications}
-            className={`transition-all duration-300 ${notificationsEnabled ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400'}`}
-            title={notificationsEnabled ? "System Notifications On" : "Enable System Notifications"}
-          >
-            {notificationsEnabled ? <Bell size={20} /> : <BellOff size={20} />}
-          </button>
+          <Tooltip content={notificationsEnabled ? "Notifications On" : "Enable Notifications"} position="bottom">
+            <button 
+              onClick={toggleNotifications}
+              className={`transition-all duration-300 ${notificationsEnabled ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-400'}`}
+            >
+              {notificationsEnabled ? <Bell size={20} /> : <BellOff size={20} />}
+            </button>
+          </Tooltip>
 
-          <button 
-            onClick={toggleTheme}
-            className="relative w-10 h-10 rounded-full border border-stone-300 dark:border-stone-700 flex items-center justify-center hover:bg-stone-200 dark:hover:bg-stone-800 transition-colors z-50 overflow-hidden"
-          >
-            <AnimatePresence mode="wait">
-              {isDark ? (
-                <motion.div key="moon" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: 90, opacity: 0 }}>
-                  <Moon size={18} className="text-stone-100" />
-                </motion.div>
-              ) : (
-                <motion.div key="sun" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }}>
-                  <Sun size={18} className="text-stone-900" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </button>
+          <Tooltip content={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`} position="bottom">
+            <button 
+              onClick={toggleTheme}
+              className="relative w-10 h-10 rounded-full border border-stone-300 dark:border-stone-700 flex items-center justify-center hover:bg-stone-200 dark:hover:bg-stone-800 transition-colors z-50 overflow-hidden"
+            >
+              <AnimatePresence mode="wait">
+                {isDark ? (
+                  <motion.div key="moon" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: 90, opacity: 0 }}>
+                    <Moon size={18} className="text-stone-100" />
+                  </motion.div>
+                ) : (
+                  <motion.div key="sun" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }}>
+                    <Sun size={18} className="text-stone-900" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </button>
+          </Tooltip>
         </div>
       </nav>
 
@@ -373,12 +392,12 @@ const App: React.FC = () => {
                   onChange={(e) => setConfig({ ...config, prompt: e.target.value })}
                   placeholder="Describe your vision..."
                   className="w-full bg-transparent border-b border-stone-300 dark:border-noir-700 py-4 text-xl md:text-2xl leading-normal text-stone-800 dark:text-stone-300 placeholder-stone-400 dark:placeholder-stone-800 focus:outline-none focus:border-stone-500 dark:focus:border-stone-400 transition-all duration-300 min-h-[140px] resize-none font-serif pr-10"
-                  disabled={generationState.loading}
+                  disabled={isLoading}
                 />
                 <PromptEnhancer 
                   onClick={handleEnhancePrompt} 
                   loading={enhancing} 
-                  disabled={generationState.loading || !config.prompt.trim()}
+                  disabled={isLoading || !config.prompt.trim()}
                 />
               </div>
             </div>
@@ -386,28 +405,18 @@ const App: React.FC = () => {
             <AspectRatioSelector 
               value={config.aspectRatio}
               onChange={(r) => setConfig({ ...config, aspectRatio: r })}
-              disabled={generationState.loading}
+              disabled={isLoading}
             />
 
             <div className="pt-4">
               <EditorialButton 
                 onClick={handleGenerate} 
-                loading={generationState.loading}
+                loading={isLoading}
                 disabled={!config.prompt.trim()}
                 className="shadow-xl shadow-stone-900/5 dark:shadow-none"
               >
-                {generationState.loading ? "Synthesizing..." : "Generate Artwork"}
+                {isLoading ? "Synthesizing..." : "Generate Artwork"}
               </EditorialButton>
-              
-              {generationState.error && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="mt-4 text-red-700 dark:text-red-900/70 text-sm font-sans tracking-wide border-l-2 border-red-500 dark:border-red-900/50 pl-3 py-1"
-                >
-                  Error: {generationState.error}
-                </motion.div>
-              )}
             </div>
           </motion.div>
         </div>
@@ -423,7 +432,7 @@ const App: React.FC = () => {
              <ImageDisplay 
                imageUrl={activeItem?.imageUrl || null} 
                remoteUrl={activeItem?.remoteUrl || null} // Now always null
-               loading={generationState.loading}
+               loading={isLoading}
                prompt={activeItem?.prompt || config.prompt}
                aspectRatio={activeItem?.aspectRatio || config.aspectRatio}
                onEdit={() => setIsEditModalOpen(true)}
@@ -455,29 +464,30 @@ const App: React.FC = () => {
                  {history.map((item) => {
                    const isActive = activeItem?.id === item.id;
                    return (
-                     <motion.button
-                       key={item.id}
-                       onClick={() => selectHistoryItem(item)}
-                       whileHover={{ scale: 1.05 }}
-                       whileTap={{ scale: 0.95 }}
-                       className={`
-                         overflow-hidden relative group transition-all duration-300
-                         ${item.aspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-square'}
-                         ${isActive ? 'ring-2 ring-stone-900 dark:ring-stone-100 ring-offset-2 ring-offset-black' : 'border border-transparent'}
-                       `}
-                     >
-                       <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
-                       
-                       {/* Overlay */}
-                       <div className={`absolute inset-0 transition-opacity duration-300 ${isActive ? 'bg-transparent' : 'bg-black/20 hover:bg-transparent'}`} />
-                       
-                       {/* Version Badge for history items */}
-                       {item.version > 1 && (
-                         <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-sm text-white text-[8px] px-1.5 py-0.5 rounded-full z-10 font-sans">
-                           v{item.version}
-                         </div>
-                       )}
-                     </motion.button>
+                     <Tooltip key={item.id} content={item.prompt.slice(0, 30) + "..."}>
+                      <motion.button
+                        onClick={() => selectHistoryItem(item)}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className={`
+                          overflow-hidden relative group transition-all duration-300 w-full
+                          ${item.aspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-square'}
+                          ${isActive ? 'ring-2 ring-stone-900 dark:ring-stone-100 ring-offset-2 ring-offset-black' : 'border border-transparent'}
+                        `}
+                      >
+                        <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
+                        
+                        {/* Overlay */}
+                        <div className={`absolute inset-0 transition-opacity duration-300 ${isActive ? 'bg-transparent' : 'bg-black/20 hover:bg-transparent'}`} />
+                        
+                        {/* Version Badge for history items */}
+                        {item.version > 1 && (
+                          <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-sm text-white text-[8px] px-1.5 py-0.5 rounded-full z-10 font-sans">
+                            v{item.version}
+                          </div>
+                        )}
+                      </motion.button>
+                     </Tooltip>
                    );
                  })}
                </div>
@@ -489,13 +499,21 @@ const App: React.FC = () => {
           isOpen={isEditModalOpen}
           onClose={() => setIsEditModalOpen(false)}
           onSubmit={handleEditSubmit}
-          loading={generationState.loading}
+          loading={isLoading}
         />
 
         <ApiKeyModal
           isOpen={showApiKeyModal}
           onSave={handleSaveApiKey}
           onClose={hasKey ? () => setShowApiKeyModal(false) : undefined}
+        />
+
+        <ErrorDialog 
+          isOpen={errorState.isOpen}
+          title={errorState.title}
+          message={errorState.message}
+          details={errorState.details}
+          onClose={closeError}
         />
 
         <Toast 

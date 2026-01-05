@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Download, Share2, Loader2, PencilLine } from 'lucide-react';
 import { AspectRatio } from '../types';
 import { ShareModal } from './ui/ShareModal';
+import { Tooltip } from './ui/Tooltip';
 
 interface ImageDisplayProps {
   imageUrl: string | null;
@@ -170,35 +171,41 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({ imageUrl, remoteUrl,
                 transition={{ duration: 0.3 }}
                 className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-stone-900/90 to-transparent z-20 flex justify-end gap-3"
               >
-                 <button 
-                    onClick={onEdit}
-                    className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all flex items-center justify-center relative overflow-hidden" 
-                    title="Edit Image"
-                 >
-                    <PencilLine size={20} strokeWidth={1.5} />
-                 </button>
+                 <Tooltip content="Refine this image">
+                   <button 
+                      onClick={onEdit}
+                      className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all flex items-center justify-center relative overflow-hidden" 
+                      aria-label="Edit Image"
+                   >
+                      <PencilLine size={20} strokeWidth={1.5} />
+                   </button>
+                 </Tooltip>
 
-                 <button 
-                    onClick={() => setShowShare(true)} 
-                    className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all flex items-center justify-center relative overflow-hidden group" 
-                    title={remoteUrl ? "Share Creation" : "Uploading..."}
-                 >
-                   <AnimatePresence mode="wait">
-                     {(!remoteUrl && !loading) ? (
-                        <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                          <Loader2 size={20} className="animate-spin" strokeWidth={1.5} />
-                        </motion.div>
-                     ) : (
-                        <motion.div key="share" initial={{ scale: 0 }} animate={{ scale: 1 }}>
-                          <Share2 size={20} strokeWidth={1.5} />
-                        </motion.div>
-                     )}
-                   </AnimatePresence>
-                 </button>
+                 <Tooltip content="Share creation">
+                   <button 
+                      onClick={() => setShowShare(true)} 
+                      className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all flex items-center justify-center relative overflow-hidden group" 
+                      aria-label="Share Image"
+                   >
+                     <AnimatePresence mode="wait">
+                       {(!remoteUrl && !loading) ? (
+                          <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <Loader2 size={20} className="animate-spin" strokeWidth={1.5} />
+                          </motion.div>
+                       ) : (
+                          <motion.div key="share" initial={{ scale: 0 }} animate={{ scale: 1 }}>
+                            <Share2 size={20} strokeWidth={1.5} />
+                          </motion.div>
+                       )}
+                     </AnimatePresence>
+                   </button>
+                 </Tooltip>
                  
-                 <button onClick={downloadImage} className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all" title="Download Image">
-                   <Download size={20} strokeWidth={1.5} />
-                 </button>
+                 <Tooltip content="Download to device">
+                   <button onClick={downloadImage} className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 backdrop-blur-md transition-all" aria-label="Download Image">
+                     <Download size={20} strokeWidth={1.5} />
+                   </button>
+                 </Tooltip>
               </motion.div>
             </motion.div>
           ) : (
