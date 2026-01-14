@@ -54,25 +54,6 @@ export const resetAiClient = () => {
   aiInstance = null;
 };
 
-// Helper to process binary parts efficiently
-const processResponseParts = (response: any): string | null => {
-   if (response.candidates && response.candidates[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        // Handle Inline Data (Image)
-        if (part.inlineData) {
-          const { mimeType, data } = part.inlineData;
-          // Return valid Data URI
-          return `data:${mimeType};base64,${data}`;
-        }
-        // If we received text instead (sometimes happens on errors or filters)
-        if (part.text && !part.inlineData) {
-           console.warn("Model returned text instead of image:", part.text);
-        }
-      }
-    }
-    return null;
-}
-
 const handleApiError = (error: any) => {
   console.error("GenAI API Error:", error);
   
@@ -85,7 +66,7 @@ const handleApiError = (error: any) => {
     throw { 
       code: "QUOTA_EXCEEDED", 
       message: "You have exceeded your current API quota. Please wait a moment before trying again.",
-      details: error.message
+      details: error.message || "Quota exhausted"
     };
   }
 
@@ -114,24 +95,50 @@ export const generateImage = async (
     if (onStatus) onStatus("Initializing neural pathways...");
     const ai = getAiClient();
 
-    // Streaming is generally for text, but we use the standard generateContent for images
-    // to get the full binary payload efficiently.
-    const response = await ai.models.generateContent({
+    const responseStream = await ai.models.generateContentStream({
       model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{ text: config.prompt }],
-      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: config.prompt }],
+        },
+      ],
       config: {
+        responseModalities: ['IMAGE', 'TEXT'] as any,
         imageConfig: {
           aspectRatio: config.aspectRatio,
         },
       },
     });
 
-    if (onStatus) onStatus("Decoding visual data...");
+    if (onStatus) onStatus("Streaming visual data...");
 
-    const imageUrl = processResponseParts(response);
-    if (imageUrl) return imageUrl;
+    let finalImageUrl: string | null = null;
+    let accumulatedText = "";
+
+    for await (const chunk of responseStream) {
+        // Check for binary image data in the chunk
+        const part = chunk.candidates?.[0]?.content?.parts?.[0];
+        
+        if (part?.inlineData) {
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            const data = part.inlineData.data;
+            finalImageUrl = `data:${mimeType};base64,${data}`;
+        }
+        
+        // Accumulate text if present (e.g. for error messages or descriptions)
+        if (chunk.text) {
+            accumulatedText += chunk.text;
+        }
+    }
+
+    if (finalImageUrl) return finalImageUrl;
+
+    // If we received text but no image, treat it as a potential refusal or error message from the model
+    if (accumulatedText) {
+        console.warn("Model returned text instead of image:", accumulatedText);
+        throw new Error(accumulatedText.slice(0, 200) + (accumulatedText.length > 200 ? "..." : ""));
+    }
 
     throw new Error("Model generated no visual data. The prompt might have triggered safety filters.");
   } catch (error: any) {
@@ -154,22 +161,26 @@ export const editImage = async (
     const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
     const mimeType = base64Image.match(/^data:(image\/[a-zA-Z]+);base64,/)?.[1] || "image/png";
 
-    const response = await ai.models.generateContent({
+    const responseStream = await ai.models.generateContentStream({
       model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: cleanBase64,
-              mimeType: mimeType,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: mimeType,
+              },
             },
-          },
-          {
-            text: editInstruction,
-          },
-        ],
-      },
+            {
+              text: editInstruction,
+            },
+          ],
+        },
+      ],
        config: {
+        responseModalities: ['IMAGE', 'TEXT'] as any,
         imageConfig: {
           aspectRatio: aspectRatio as any,
         },
@@ -178,8 +189,29 @@ export const editImage = async (
 
     if (onStatus) onStatus("Refining details...");
 
-    const imageUrl = processResponseParts(response);
-    if (imageUrl) return imageUrl;
+    let finalImageUrl: string | null = null;
+    let accumulatedText = "";
+
+    for await (const chunk of responseStream) {
+        const part = chunk.candidates?.[0]?.content?.parts?.[0];
+        
+        if (part?.inlineData) {
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            const data = part.inlineData.data;
+            finalImageUrl = `data:${mimeType};base64,${data}`;
+        }
+        
+        if (chunk.text) {
+            accumulatedText += chunk.text;
+        }
+    }
+
+    if (finalImageUrl) return finalImageUrl;
+
+    if (accumulatedText) {
+        console.warn("Model returned text instead of image:", accumulatedText);
+        throw new Error(accumulatedText.slice(0, 200));
+    }
 
     throw new Error("Failed to edit image.");
   } catch (error: any) {
@@ -193,15 +225,19 @@ export const enhancePrompt = async (currentPrompt: string): Promise<string> => {
     const ai = getAiClient();
     
     // Using streaming for text response as requested for best practice
-    // although for short prompts strictly waiting is also fine.
-    const response = await ai.models.generateContent({
+    const responseStream = await ai.models.generateContentStream({
       model: 'gemini-3-flash-preview',
       contents: `You are an expert art director. Rewrite the following image prompt to be more descriptive, artistic, and detailed. Keep it under 50 words. Return ONLY the prompt text. 
       
       Original: "${currentPrompt}"`,
     });
     
-    return response.text?.trim() || currentPrompt;
+    let text = "";
+    for await (const chunk of responseStream) {
+       text += chunk.text();
+    }
+    
+    return text.trim() || currentPrompt;
   } catch (error) {
     // We swallow enhance errors mostly to not block the user, but logging them is good
     console.warn("Enhance prompt failed", error);
